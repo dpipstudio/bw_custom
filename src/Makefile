@@ -7,6 +7,12 @@ UNAME := $(shell uname -m)
 # Determine Raspberry Pi version (if 2 or greater)
 RPI_VERSION := $(shell cat /proc/device-tree/model | grep -a -o "Raspberry\sPi\s[0-9]" | grep -o "[0-9]")
 
+# Detect Raspberry Pi Zero 2 W specifically and override RPI_VERSION
+ifneq (,$(findstring Zero 2 W,$(shell tr -d '\0' < /proc/device-tree/model)))
+    $(info Detected Raspberry Pi Zero 2 W → forcing RPI_VERSION=3)
+    RPI_VERSION := 3
+endif
+
 # Determine the hardware platform and set proper compilation flags
 ifeq ($(UNAME), armv6l)
 	ARCH_CFLAGS = -march=armv6 -O3 -mtune=arm1176jzf-s -mfloat-abi=hard -mfpu=vfp -ffast-math
@@ -30,8 +36,8 @@ CFLAGS = $(STD_CFLAGS) $(ARCH_CFLAGS) -DRASPI=$(TARGET)
 
 ifneq ($(TARGET), other)
 
-app: rds.o waveforms.o pi_fm_rds.o rds_strings.o fm_mpx.o mailbox.o
-	$(CC) $(LDFLAGS) -o pi_fm_rds rds.o rds_strings.o waveforms.o mailbox.o pi_fm_rds.o fm_mpx.o -lsndfile -lm
+app: rds.o waveforms.o bw_custom.o rds_strings.o fm_mpx.o mailbox.o
+	$(CC) $(LDFLAGS) -o bw_custom rds.o rds_strings.o waveforms.o mailbox.o bw_custom.o fm_mpx.o -lsndfile -lm
 
 endif
 
@@ -56,8 +62,8 @@ waveforms.o: waveforms.c waveforms.h
 mailbox.o: mailbox.c mailbox.h
 	$(CC) $(CFLAGS) mailbox.c
 
-pi_fm_rds.o: pi_fm_rds.c fm_mpx.h rds.h mailbox.h
-	$(CC) $(CFLAGS) pi_fm_rds.c
+bw_custom.o: bw_custom.c fm_mpx.h rds.h mailbox.h
+	$(CC) $(CFLAGS) bw_custom.c
 
 rds_wav.o: rds_wav.c
 	$(CC) $(CFLAGS) rds_wav.c

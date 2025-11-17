@@ -1,15 +1,15 @@
 /*
  * BotWave Custom - FM/RDS transmitter for the Raspberry Pi
- * 
+ *
  * Based on PiFmRds by Christophe Jacquet, F8FTK
- * 
+ *
  * Copyright (C) 2025, douxx@douxx.tech
  * Copyright (C) 2014, 2015 Christophe Jacquet, F8FTK
  * Copyright (C) 2012, 2015 Richard Hirst
  * Copyright (C) 2012 Oliver Mattos and Oskar Weigl
  *
- * See: https://github.com/dpipstudio/BWCustom
- * 
+ * See: https://github.com/dpipstudio/bw_custom
+ *
  * Original project: https://github.com/ChristopheJacquet/PiFmRds
  *
  * PI-FM-RDS: RaspberryPi FM transmitter, with RDS.
@@ -115,162 +115,192 @@
 #include "fm_mpx.h"
 
 #include "mailbox.h"
-#define MBFILE            DEVICE_FILE_NAME    /* From mailbox.h */
+#define MBFILE DEVICE_FILE_NAME /* From mailbox.h */
+
+#define VERSION "BWC v1.0"
 
 // Hardware addresses differ between Raspberry Pi models
 // These macros set the correct memory addresses based on Pi version
-#if (RASPI)==1
-#define PERIPH_VIRT_BASE 0x20000000  // Virtual base address for peripherals
-#define PERIPH_PHYS_BASE 0x7e000000  // Physical base address
-#define DRAM_PHYS_BASE 0x40000000    // RAM base address
-#define MEM_FLAG 0x0c                // Memory allocation flags
-#define PLLFREQ 500000000.           // PLL clock frequency (500 MHz)
-#elif (RASPI)==2
+#if (RASPI) == 1
+#define PERIPH_VIRT_BASE 0x20000000 // Virtual base address for peripherals
+#define PERIPH_PHYS_BASE 0x7e000000 // Physical base address
+#define DRAM_PHYS_BASE 0x40000000   // RAM base address
+#define MEM_FLAG 0x0c               // Memory allocation flags
+#define PLLFREQ 500000000.          // PLL clock frequency (500 MHz)
+#elif (RASPI) == 2
 #define PERIPH_VIRT_BASE 0x3f000000
 #define PERIPH_PHYS_BASE 0x7e000000
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
 #define PLLFREQ 500000000.
-#elif (RASPI)==4
+#elif (RASPI) == 4
 #define PERIPH_VIRT_BASE 0xfe000000
 #define PERIPH_PHYS_BASE 0x7e000000
 #define DRAM_PHYS_BASE 0xc0000000
 #define MEM_FLAG 0x04
-#define PLLFREQ 750000000.           // Pi 4 has faster PLL (750 MHz)
+#define PLLFREQ 750000000. // Pi 4 has faster PLL (750 MHz)
 #else
 #error Unknown Raspberry Pi version (variable RASPI)
 #endif
 
 // Number of frequency samples to generate
-#define NUM_SAMPLES        50000
+#define NUM_SAMPLES 50000
 // Each sample needs 2 DMA control blocks (one for data, one for timing)
-#define NUM_CBS            (NUM_SAMPLES * 2)
+#define NUM_CBS (NUM_SAMPLES * 2)
 
 // DMA (Direct Memory Access) control flags
 // DMA allows hardware to access memory without CPU involvement
-#define BCM2708_DMA_NO_WIDE_BURSTS    (1<<26)  // Use single-word transfers
-#define BCM2708_DMA_WAIT_RESP        (1<<3)    // Wait for write acknowledgment
-#define BCM2708_DMA_D_DREQ        (1<<6)       // Use DREQ (data request) signal
-#define BCM2708_DMA_PER_MAP(x)        ((x)<<16) // Map to peripheral
-#define BCM2708_DMA_END            (1<<1)       // Transfer complete flag
-#define BCM2708_DMA_RESET        (1<<31)       // Reset DMA channel
-#define BCM2708_DMA_INT            (1<<2)       // Interrupt flag
+#define BCM2708_DMA_NO_WIDE_BURSTS (1 << 26) // Use single-word transfers
+#define BCM2708_DMA_WAIT_RESP (1 << 3)       // Wait for write acknowledgment
+#define BCM2708_DMA_D_DREQ (1 << 6)          // Use DREQ (data request) signal
+#define BCM2708_DMA_PER_MAP(x) ((x) << 16)   // Map to peripheral
+#define BCM2708_DMA_END (1 << 1)             // Transfer complete flag
+#define BCM2708_DMA_RESET (1 << 31)          // Reset DMA channel
+#define BCM2708_DMA_INT (1 << 2)             // Interrupt flag
 
 // DMA register offsets (divided by 4 because they're 32-bit words)
-#define DMA_CS            (0x00/4)  // Control and Status register
-#define DMA_CONBLK_AD        (0x04/4)  // Control Block Address register
-#define DMA_DEBUG        (0x20/4)  // Debug register
+#define DMA_CS (0x00 / 4)        // Control and Status register
+#define DMA_CONBLK_AD (0x04 / 4) // Control Block Address register
+#define DMA_DEBUG (0x20 / 4)     // Debug register
 
 // Hardware module offsets from peripheral base
-#define DMA_BASE_OFFSET        0x00007000
-#define DMA_LEN            0x24
-#define PWM_BASE_OFFSET        0x0020C000  // PWM for timing
-#define PWM_LEN            0x28
-#define CLK_BASE_OFFSET            0x00101000  // Clock generator
-#define CLK_LEN            0xA8
-#define GPIO_BASE_OFFSET    0x00200000  // GPIO pins
-#define GPIO_LEN        0x100
+#define DMA_BASE_OFFSET 0x00007000
+#define DMA_LEN 0x24
+#define PWM_BASE_OFFSET 0x0020C000 // PWM for timing
+#define PWM_LEN 0x28
+#define CLK_BASE_OFFSET 0x00101000 // Clock generator
+#define CLK_LEN 0xA8
+#define GPIO_BASE_OFFSET 0x00200000 // GPIO pins
+#define GPIO_LEN 0x100
 
 // Calculate full virtual addresses for each hardware module
-#define DMA_VIRT_BASE        (PERIPH_VIRT_BASE + DMA_BASE_OFFSET)
-#define PWM_VIRT_BASE        (PERIPH_VIRT_BASE + PWM_BASE_OFFSET)
-#define CLK_VIRT_BASE        (PERIPH_VIRT_BASE + CLK_BASE_OFFSET)
-#define GPIO_VIRT_BASE        (PERIPH_VIRT_BASE + GPIO_BASE_OFFSET)
-#define PCM_VIRT_BASE        (PERIPH_VIRT_BASE + PCM_BASE_OFFSET)
+#define DMA_VIRT_BASE (PERIPH_VIRT_BASE + DMA_BASE_OFFSET)
+#define PWM_VIRT_BASE (PERIPH_VIRT_BASE + PWM_BASE_OFFSET)
+#define CLK_VIRT_BASE (PERIPH_VIRT_BASE + CLK_BASE_OFFSET)
+#define GPIO_VIRT_BASE (PERIPH_VIRT_BASE + GPIO_BASE_OFFSET)
+#define PCM_VIRT_BASE (PERIPH_VIRT_BASE + PCM_BASE_OFFSET)
 
 // Calculate physical addresses (used by DMA)
-#define PWM_PHYS_BASE        (PERIPH_PHYS_BASE + PWM_BASE_OFFSET)
-#define PCM_PHYS_BASE        (PERIPH_PHYS_BASE + PCM_BASE_OFFSET)
-#define GPIO_PHYS_BASE        (PERIPH_PHYS_BASE + GPIO_BASE_OFFSET)
+#define PWM_PHYS_BASE (PERIPH_PHYS_BASE + PWM_BASE_OFFSET)
+#define PCM_PHYS_BASE (PERIPH_PHYS_BASE + PCM_BASE_OFFSET)
+#define GPIO_PHYS_BASE (PERIPH_PHYS_BASE + GPIO_BASE_OFFSET)
 
 // PWM (Pulse Width Modulation) register offsets
-#define PWM_CTL            (0x00/4)  // Control register
-#define PWM_DMAC        (0x08/4)     // DMA configuration
-#define PWM_RNG1        (0x10/4)     // Range register
-#define PWM_FIFO        (0x18/4)     // FIFO data register
+#define PWM_CTL (0x00 / 4)  // Control register
+#define PWM_DMAC (0x08 / 4) // DMA configuration
+#define PWM_RNG1 (0x10 / 4) // Range register
+#define PWM_FIFO (0x18 / 4) // FIFO data register
 
 // PWM Clock registers
-#define PWMCLK_CNTL        40
-#define PWMCLK_DIV        41
+#define PWMCLK_CNTL 40
+#define PWMCLK_DIV 41
 
 // GPIO clock divider register address
 #define CM_GP0DIV (0x7e101074)
 
 // GPIO Clock register offsets
-#define GPCLK_CNTL        (0x70/4)  // Control register
-#define GPCLK_DIV        (0x74/4)   // Divider register
+#define GPCLK_CNTL (0x70 / 4) // Control register
+#define GPCLK_DIV (0x74 / 4)  // Divider register
 
 // PWM control flags
-#define PWMCTL_MODE1        (1<<1)  // Use PWM mode
-#define PWMCTL_PWEN1        (1<<0)  // Enable PWM channel 1
-#define PWMCTL_CLRF        (1<<6)   // Clear FIFO
-#define PWMCTL_USEF1        (1<<5)  // Use FIFO
+#define PWMCTL_MODE1 (1 << 1) // Use PWM mode
+#define PWMCTL_PWEN1 (1 << 0) // Enable PWM channel 1
+#define PWMCTL_CLRF (1 << 6)  // Clear FIFO
+#define PWMCTL_USEF1 (1 << 5) // Use FIFO
 
 // PWM DMA configuration
-#define PWMDMAC_ENAB        (1<<31)  // Enable DMA
-#define PWMDMAC_THRSHLD        ((15<<8)|(15<<0))  // FIFO threshold
+#define PWMDMAC_ENAB (1 << 31)                  // Enable DMA
+#define PWMDMAC_THRSHLD ((15 << 8) | (15 << 0)) // FIFO threshold
 
 // GPIO function select register
-#define GPFSEL0            (0x00/4)
+#define GPFSEL0 (0x00 / 4)
 
 // Frequency deviation for FM modulation (25 kHz for broadcast FM)
-#define DEVIATION        25.0
+#define DEVIATION 25.0
 
 // DMA Control Block structure
 // This tells the DMA controller what to transfer, where, and what to do next
-typedef struct {
-    uint32_t info;     // Transfer information (flags)
-    uint32_t src;      // Source address (where to read from)
-    uint32_t dst;      // Destination address (where to write to)
-    uint32_t length;   // How many bytes to transfer
-    uint32_t stride;   // 2D stride (not used here)
-    uint32_t next;     // Address of next control block (for chaining)
-    uint32_t pad[2];   // Padding for alignment
+typedef struct
+{
+    uint32_t info;   // Transfer information (flags)
+    uint32_t src;    // Source address (where to read from)
+    uint32_t dst;    // Destination address (where to write to)
+    uint32_t length; // How many bytes to transfer
+    uint32_t stride; // 2D stride (not used here)
+    uint32_t next;   // Address of next control block (for chaining)
+    uint32_t pad[2]; // Padding for alignment
 } dma_cb_t;
 
 // Convert bus address to physical address (remove cache bits)
-#define BUS_TO_PHYS(x) ((x)&~0xC0000000)
+#define BUS_TO_PHYS(x) ((x) & ~0xC0000000)
 
 // Structure to hold mailbox memory allocation info
 // The mailbox is used to request special memory from the GPU
-static struct {
-    int handle;            // File handle to mailbox device
-    unsigned mem_ref;      // Memory reference from allocation
-    unsigned bus_addr;     // Bus address (used by DMA)
-    uint8_t *virt_addr;    // Virtual address (used by CPU)
+static struct
+{
+    int handle;         // File handle to mailbox device
+    unsigned mem_ref;   // Memory reference from allocation
+    unsigned bus_addr;  // Bus address (used by DMA)
+    uint8_t *virt_addr; // Virtual address (used by CPU)
 } mbox;
 
 // Pointers to hardware registers (volatile = can change unexpectedly)
-static volatile uint32_t *pwm_reg;   // PWM registers
-static volatile uint32_t *clk_reg;   // Clock registers
-static volatile uint32_t *dma_reg;   // DMA registers
-static volatile uint32_t *gpio_reg;  // GPIO registers
+static volatile uint32_t *pwm_reg;  // PWM registers
+static volatile uint32_t *clk_reg;  // Clock registers
+static volatile uint32_t *dma_reg;  // DMA registers
+static volatile uint32_t *gpio_reg; // GPIO registers
 
 // Main data structure: holds all DMA control blocks and frequency samples
-struct control_data_s {
-    dma_cb_t cb[NUM_CBS];           // Array of DMA control blocks
-    uint32_t sample[NUM_SAMPLES];   // Array of frequency samples
+struct control_data_s
+{
+    dma_cb_t cb[NUM_CBS];         // Array of DMA control blocks
+    uint32_t sample[NUM_SAMPLES]; // Array of frequency samples
 };
 
 // Memory management constants
-#define PAGE_SIZE    4096
-#define PAGE_SHIFT    12
-#define NUM_PAGES    ((sizeof(struct control_data_s) + PAGE_SIZE - 1) >> PAGE_SHIFT)
+#define PAGE_SIZE 4096
+#define PAGE_SHIFT 12
+#define NUM_PAGES ((sizeof(struct control_data_s) + PAGE_SIZE - 1) >> PAGE_SHIFT)
 
 // Pointer to our control data structure
 static struct control_data_s *ctl;
 
 // Sleep for specified microseconds
-static void udelay(int us) {
-    struct timespec ts = { 0, us * 1000 };
+static void udelay(int us)
+{
+    struct timespec ts = {0, us * 1000};
     nanosleep(&ts, NULL);
+}
+
+static void print_help(const char *progname)
+{
+    printf("Usage: %s [options]\n", progname);
+    printf("Options:\n");
+    printf("  -freq <MHz>     Set carrier frequency (76.0-108.0 MHz)\n");
+    printf("  -audio <file>   Audio file to transmit (WAV format)\n");
+    printf("  -pi <code>      Program Identifier (hex, e.g., 0x1234)\n");
+    printf("  -ps <text>      Program Service name (8 chars max)\n");
+    printf("  -rt <text>      Radio Text (64 chars max)\n");
+    printf("  -loop           Loop audio file\n");
+    printf("  -h              Print this help message\n");
+    printf("  -v              Print version information\n");
+}
+
+static void print_version(void)
+{
+    printf("BotWave Custom FM/RDS Transmitter\n");
+    printf("Version: %s\n", VERSION);
+    printf("Based on PiFmRds by Christophe Jacquet, F8FTK\n");
+    printf("Copyright (C) 2025, douxx@douxx.tech\n");
 }
 
 // Clean shutdown function - VERY IMPORTANT!
 // This stops the DMA and turns off the transmitter
-static void terminate(int num) {
+static void terminate(int num)
+{
     // Stop the clock generator on GPIO4
-    if (clk_reg && gpio_reg && mbox.virt_addr) {
+    if (clk_reg && gpio_reg && mbox.virt_addr)
+    {
         // Change GPIO4 from clock function back to regular output
         gpio_reg[GPFSEL0] = (gpio_reg[GPFSEL0] & ~(7 << 12)) | (1 << 12);
 
@@ -279,7 +309,8 @@ static void terminate(int num) {
     }
 
     // Stop the DMA engine
-    if (dma_reg && mbox.virt_addr) {
+    if (dma_reg && mbox.virt_addr)
+    {
         dma_reg[DMA_CS] = BCM2708_DMA_RESET;
         udelay(10);
     }
@@ -288,7 +319,8 @@ static void terminate(int num) {
     fm_mpx_close();
 
     // Free the allocated memory
-    if (mbox.virt_addr != NULL) {
+    if (mbox.virt_addr != NULL)
+    {
         unmapmem(mbox.virt_addr, NUM_PAGES * 4096);
         mem_unlock(mbox.handle, mbox.mem_ref);
         mem_free(mbox.handle, mbox.mem_ref);
@@ -299,7 +331,8 @@ static void terminate(int num) {
 }
 
 // Print error message and terminate
-static void fatal(char *fmt, ...) {
+static void fatal(char *fmt, ...)
+{
     va_list ap;
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -309,27 +342,30 @@ static void fatal(char *fmt, ...) {
 
 // Convert virtual address to physical address
 // (Virtual = what CPU sees, Physical = what DMA needs)
-static size_t mem_virt_to_phys(void *virt) {
+static size_t mem_virt_to_phys(void *virt)
+{
     size_t offset = (size_t)virt - (size_t)mbox.virt_addr;
     return mbox.bus_addr + offset;
 }
 
 // Convert physical address back to virtual address
-static size_t mem_phys_to_virt(size_t phys) {
-    return (size_t) (phys - mbox.bus_addr + mbox.virt_addr);
+static size_t mem_phys_to_virt(size_t phys)
+{
+    return (size_t)(phys - mbox.bus_addr + mbox.virt_addr);
 }
 
 // Map a hardware peripheral into our process's memory space
 // This lets us access hardware registers directly
-static void *map_peripheral(uint32_t base, uint32_t len) {
+static void *map_peripheral(uint32_t base, uint32_t len)
+{
     int fd = open("/dev/mem", O_RDWR | O_SYNC);
-    void * vaddr;
+    void *vaddr;
 
     if (fd < 0)
         fatal("Failed to open /dev/mem: %m.\n");
-    
+
     // mmap = memory map - maps physical memory to virtual memory
-    vaddr = mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, base);
+    vaddr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, base);
     if (vaddr == MAP_FAILED)
         fatal("Failed to map peripheral at 0x%08x: %m.\n", base);
     close(fd);
@@ -341,10 +377,12 @@ static void *map_peripheral(uint32_t base, uint32_t len) {
 #define DATA_SIZE 5000
 
 // Main transmission function
-int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm, int loop_audio) {
+int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm, int loop_audio)
+{
     // Set up signal handlers to catch ALL signals
     // This ensures we always clean up properly, even if killed
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 64; i++)
+    {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
         sa.sa_handler = terminate;
@@ -362,19 +400,22 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
     mbox.handle = mbox_open();
     if (mbox.handle < 0)
         fatal("Failed to open mailbox. Check kernel support for vcio / BCM2708 mailbox.\n");
-    
+
     printf("Allocating physical memory: size = %zu     ", NUM_PAGES * 4096);
-    if(! (mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG))) {
+    if (!(mbox.mem_ref = mem_alloc(mbox.handle, NUM_PAGES * 4096, 4096, MEM_FLAG)))
+    {
         fatal("Could not allocate memory.\n");
     }
-    
+
     printf("mem_ref = %u     ", mbox.mem_ref);
-    if(! (mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref))) {
+    if (!(mbox.bus_addr = mem_lock(mbox.handle, mbox.mem_ref)))
+    {
         fatal("Could not lock memory.\n");
     }
-    
+
     printf("bus_addr = %x     ", mbox.bus_addr);
-    if(! (mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096))) {
+    if (!(mbox.virt_addr = mapmem(BUS_TO_PHYS(mbox.bus_addr), NUM_PAGES * 4096)))
+    {
         fatal("Could not map memory.\n");
     }
     printf("virt_addr = %p\n", mbox.virt_addr);
@@ -385,52 +426,53 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
 
     // Set up the GPIO clock with MASH (noise shaping) enabled
     // 0x5A is a "password" required to modify clock registers
-    clk_reg[GPCLK_CNTL] = 0x5A << 24 | 6;  // Set source to PLLD
+    clk_reg[GPCLK_CNTL] = 0x5A << 24 | 6; // Set source to PLLD
     udelay(100);
-    clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6;  // Enable MASH and clock
+    clk_reg[GPCLK_CNTL] = 0x5A << 24 | 1 << 9 | 1 << 4 | 6; // Enable MASH and clock
 
     // Get pointer to our control structure
-    ctl = (struct control_data_s *) mbox.virt_addr;
-    dma_cb_t *cbp = ctl->cb;  // Pointer to walk through control blocks
-    
+    ctl = (struct control_data_s *)mbox.virt_addr;
+    dma_cb_t *cbp = ctl->cb; // Pointer to walk through control blocks
+
     // Physical addresses that DMA will write to
-    uint32_t phys_sample_dst = CM_GP0DIV;  // Clock divider register
-    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18;  // PWM FIFO
+    uint32_t phys_sample_dst = CM_GP0DIV;               // Clock divider register
+    uint32_t phys_pwm_fifo_addr = PWM_PHYS_BASE + 0x18; // PWM FIFO
 
     // Calculate frequency control word
     // This is the base frequency value written to the clock divider
     // Lower 12 bits are fractional part
-    uint32_t freq_ctl = ((float)(PLLFREQ / carrier_freq)) * ( 1 << 12 );
+    uint32_t freq_ctl = ((float)(PLLFREQ / carrier_freq)) * (1 << 12);
 
     // Build circular buffer of DMA control blocks
     // Each sample needs 2 control blocks:
     //   1. Write the frequency value to the clock divider
     //   2. Wait for PWM timing (this paces the DMA)
-    for (int i = 0; i < NUM_SAMPLES; i++) {
+    for (int i = 0; i < NUM_SAMPLES; i++)
+    {
         // Initialize sample with silence (just the base frequency)
         ctl->sample[i] = 0x5a << 24 | freq_ctl;
-        
+
         // Control block 1: Write frequency sample to clock divider
         cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP;
-        cbp->src = mem_virt_to_phys(ctl->sample + i);  // Read from our sample array
-        cbp->dst = phys_sample_dst;                     // Write to clock divider
-        cbp->length = 4;                                // Transfer 4 bytes (32 bits)
-        cbp->stride = 0;                                // No 2D stride
-        cbp->next = mem_virt_to_phys(cbp + 1);         // Next control block
+        cbp->src = mem_virt_to_phys(ctl->sample + i); // Read from our sample array
+        cbp->dst = phys_sample_dst;                   // Write to clock divider
+        cbp->length = 4;                              // Transfer 4 bytes (32 bits)
+        cbp->stride = 0;                              // No 2D stride
+        cbp->next = mem_virt_to_phys(cbp + 1);        // Next control block
         cbp++;
-        
+
         // Control block 2: Delay/timing via PWM FIFO
         // This waits for PWM to request data, which provides precise timing
-        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP | 
+        cbp->info = BCM2708_DMA_NO_WIDE_BURSTS | BCM2708_DMA_WAIT_RESP |
                     BCM2708_DMA_D_DREQ | BCM2708_DMA_PER_MAP(5);
-        cbp->src = mem_virt_to_phys(mbox.virt_addr);   // Dummy read
-        cbp->dst = phys_pwm_fifo_addr;                  // Write to PWM FIFO
+        cbp->src = mem_virt_to_phys(mbox.virt_addr); // Dummy read
+        cbp->dst = phys_pwm_fifo_addr;               // Write to PWM FIFO
         cbp->length = 4;
         cbp->stride = 0;
         cbp->next = mem_virt_to_phys(cbp + 1);
         cbp++;
     }
-    
+
     // Make the last control block point back to the first (circular buffer)
     cbp--;
     cbp->next = mem_virt_to_phys(mbox.virt_addr);
@@ -438,46 +480,46 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
     // Configure PWM timing
     // PWM creates the precise 228 kHz sample rate needed for FM transmission
     // The divider calculation compensates for oscillator frequency error (ppm)
-    float divider = (PLLFREQ/(2000*228*(1.+ppm/1.e6)));
-    uint32_t idivider = (uint32_t) divider;              // Integer part
-    uint32_t fdivider = (uint32_t) ((divider - idivider)*pow(2, 12));  // Fractional part
+    float divider = (PLLFREQ / (2000 * 228 * (1. + ppm / 1.e6)));
+    uint32_t idivider = (uint32_t)divider;                             // Integer part
+    uint32_t fdivider = (uint32_t)((divider - idivider) * pow(2, 12)); // Fractional part
 
     printf("ppm corr is %.4f, divider is %.4f (%d + %d*2^-12) [nominal 1096.4912].\n",
-                ppm, divider, idivider, fdivider);
+           ppm, divider, idivider, fdivider);
 
     // Configure PWM
-    pwm_reg[PWM_CTL] = 0;  // Stop PWM
+    pwm_reg[PWM_CTL] = 0; // Stop PWM
     udelay(10);
-    
+
     // Set PWM clock source to PLLD and disable
     clk_reg[PWMCLK_CNTL] = 0x5A000006;
     udelay(100);
-    
+
     // Set the divider (determines sample rate)
-    clk_reg[PWMCLK_DIV] = 0x5A000000 | (idivider<<12) | fdivider;
+    clk_reg[PWMCLK_DIV] = 0x5A000000 | (idivider << 12) | fdivider;
     udelay(100);
-    
+
     // Enable PWM clock with MASH filter
     clk_reg[PWMCLK_CNTL] = 0x5A000216;
     udelay(100);
-    
+
     // Set PWM range and enable DMA
     pwm_reg[PWM_RNG1] = 2;
     udelay(10);
     pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
     udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_CLRF;  // Clear FIFO
+    pwm_reg[PWM_CTL] = PWMCTL_CLRF; // Clear FIFO
     udelay(10);
-    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1;  // Enable PWM
+    pwm_reg[PWM_CTL] = PWMCTL_USEF1 | PWMCTL_PWEN1; // Enable PWM
     udelay(10);
 
     // Start the DMA engine!
-    dma_reg[DMA_CS] = BCM2708_DMA_RESET;  // Reset first
+    dma_reg[DMA_CS] = BCM2708_DMA_RESET; // Reset first
     udelay(10);
-    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END;  // Clear flags
-    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);   // Point to first control block
-    dma_reg[DMA_DEBUG] = 7;  // Clear debug errors
-    dma_reg[DMA_CS] = 0x10880001;  // GO! Start DMA transfer
+    dma_reg[DMA_CS] = BCM2708_DMA_INT | BCM2708_DMA_END; // Clear flags
+    dma_reg[DMA_CONBLK_AD] = mem_virt_to_phys(ctl->cb);  // Point to first control block
+    dma_reg[DMA_DEBUG] = 7;                              // Clear debug errors
+    dma_reg[DMA_CS] = 0x10880001;                        // GO! Start DMA transfer
 
     // Track which control block DMA is currently processing
     size_t last_cb = (size_t)ctl->cb;
@@ -488,23 +530,24 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
     int data_index = 0;
 
     // Initialize audio processing
-    if(fm_mpx_open(audio_file, DATA_SIZE, loop_audio) < 0) return 1;
+    if (fm_mpx_open(audio_file, DATA_SIZE, loop_audio) < 0)
+        return 1;
 
     // Initialize RDS (Radio Data System) - sends station info
-    set_rds_pi(pi);  // Program Identifier
-    set_rds_rt(rt);  // Radio Text
+    set_rds_pi(pi); // Program Identifier
+    set_rds_rt(rt); // Radio Text
 
-    
     set_rds_ps(ps);
     printf("PI: %04X, PS: \"%s\".\n", pi, ps);
-    
+
     printf("RT: \"%s\"\n", rt);
 
-    printf("Starting to transmit on %3.1f MHz.\n", carrier_freq/1e6);
+    printf("Starting to transmit on %3.1f MHz.\n", carrier_freq / 1e6);
 
     // Main transmission loop - runs forever until terminated
-    for (;;) {
-        usleep(5000);  // Sleep 5ms
+    for (;;)
+    {
+        usleep(5000); // Sleep 5ms
 
         // Calculate how many samples the DMA has consumed
         // We can safely write to those slots
@@ -518,10 +561,13 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
             free_slots += NUM_SAMPLES;
 
         // Fill available slots with new samples
-        while (free_slots >= SUBSIZE) {
+        while (free_slots >= SUBSIZE)
+        {
             // Get more audio data if buffer is empty
-            if(data_len == 0) {
-                if( fm_mpx_get_samples(data) < 0 ) {
+            if (data_len == 0)
+            {
+                if (fm_mpx_get_samples(data) < 0)
+                {
                     terminate(0);
                 }
                 data_len = DATA_SIZE;
@@ -539,14 +585,14 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
             // Write new frequency sample
             // This is: base_frequency + audio_deviation
             ctl->sample[last_sample++] = (0x5A << 24 | freq_ctl) + intval;
-            
+
             // Wrap around at end of buffer
             if (last_sample == NUM_SAMPLES)
                 last_sample = 0;
 
             free_slots -= SUBSIZE;
         }
-        
+
         // Update our position in the circular buffer
         last_cb = (size_t)(mbox.virt_addr + last_sample * sizeof(dma_cb_t) * 2);
     }
@@ -555,69 +601,110 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
 }
 
 // Program entry point
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     // Required parameters (must be provided by user)
     char *audio_file = NULL;
     uint32_t carrier_freq = 0;
-    
+
     // Optional parameters with defaults
-    char *ps = "BWC";  // Default station name
-    char *rt = "BWC: FM transmission from RaspberryPi";  // Default radio text
-    uint16_t pi = 0x1234;  // Default PI code
+    char *ps = "BWC";                                   // Default station name
+    char *rt = "BWC: FM transmission from RaspberryPi"; // Default radio text
+    uint16_t pi = 0x1234;                               // Default PI code
     int loop_audio = 0;
 
     // Parse command line arguments
-    for(int i=1; i<argc; i++) {
+    for (int i = 1; i < argc; i++)
+    {
         char *arg = argv[i];
-        char *param = NULL;
 
-        // Get parameter for flags that need one
-        if(arg[0] == '-' && i+1 < argc) param = argv[i+1];
-
-        if((strcmp("-wav", arg)==0 || strcmp("-audio", arg)==0) && param != NULL) {
-            i++;
-            audio_file = param;
-        } else if(strcmp("-freq", arg)==0 && param != NULL) {
-            i++;
-            carrier_freq = 1e6 * atof(param);  // Convert MHz to Hz
-            if(carrier_freq < 76e6 || carrier_freq > 108e6)
-                fatal("Incorrect frequency specification. Must be in megahertz, of the form 107.9, between 76 and 108.\n");
-        } else if(strcmp("-pi", arg)==0 && param != NULL) {
-            i++;
-            pi = (uint16_t) strtol(param, NULL, 16);  // Parse as hex
-        } else if(strcmp("-ps", arg)==0 && param != NULL) {
-            i++;
-            ps = param;  // Program Service name (8 chars)
-        } else if(strcmp("-rt", arg)==0 && param != NULL) {
-            i++;
-            rt = param;  // Radio Text (64 chars)
+        // Flags without arguments
+        if (strcmp(arg, "-h") == 0)
+        {
+            print_help(argv[0]);
+            return 0;
         }
-        else if(strcmp("-loop", arg)==0) {
-            loop_audio = 1;  // Enable looping
-        } else {
+        else if (strcmp(arg, "-v") == 0)
+        {
+            print_version();
+            return 0;
+        }
+        else if (strcmp(arg, "-loop") == 0)
+        {
+            loop_audio = 1;
+            continue;
+        }
+
+        // Flags WITH an argument
+        if ((strcmp(arg, "-wav") == 0 || strcmp(arg, "-audio") == 0))
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -audio\n");
+            audio_file = argv[++i]; // accept "-" as valid filename
+            continue;
+        }
+        else if (strcmp(arg, "-freq") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -freq\n");
+            carrier_freq = 1e6 * atof(argv[++i]);
+            if (carrier_freq < 76e6 || carrier_freq > 108e6)
+                fatal("Incorrect frequency (must be 76–108 MHz)\n");
+            continue;
+        }
+        else if (strcmp(arg, "-pi") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -pi\n");
+            pi = (uint16_t)strtol(argv[++i], NULL, 16);
+            continue;
+        }
+        else if (strcmp(arg, "-ps") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -ps\n");
+            ps = argv[++i];
+            continue;
+        }
+        else if (strcmp(arg, "-rt") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -rt\n");
+            rt = argv[++i];
+            continue;
+        }
+
+        // Unknown option
+        if (arg[0] == '-')
+        {
             fatal("Unrecognised argument: %s.\n"
-            "Syntax: pi_fm_rds -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>] [-loop]\n", arg);
+                "Syntax: bw_custom -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>] [-loop] [-h] [-v]\n", arg);
         }
     }
-    
+
     // Validate required parameters only
-    if(carrier_freq == 0) {
+    if (carrier_freq == 0)
+    {
         fatal("Error: Frequency is required. Use -freq <MHz> (e.g., -freq 107.9)\n");
     }
-        if(audio_file == NULL) {
-        fatal("Error: Audio file is required. Use -audio <filename>\n");
+    if (audio_file == NULL)
+    {
+        fatal("Error: Audio file is required. Use -audio <filename|->\n");
     }
-    
+
     // Show what we're using
     printf("Configuration:\n");
-    printf("  Frequency: %.1f MHz\n", carrier_freq/1e6);
-    printf("  Audio file: %s\n", audio_file);
+    printf("  Frequency: %.1f MHz\n", carrier_freq / 1e6);
+    if (loop_audio)
+        printf("  Audio file: %s (looping)\n", audio_file);
+    else
+        printf("  Audio file: %s\n", audio_file);
     printf("  PI code: %04X\n", pi);
     printf("  PS (station name): %s\n", ps);
     printf("  RT (radio text): %s\n", rt);
     printf("\n");
 
-    char* locale = setlocale(LC_ALL, "");
+    char *locale = setlocale(LC_ALL, "");
     printf("Locale set to %s.\n", locale);
 
     // Start transmitting!
