@@ -4,7 +4,7 @@ A custom FM-RDS transmitter using the Raspberry Pi's PWM, based on [PiFmRds](htt
   
 This software has been made to suit the needs of [BotWave](https://github.com/dpipstudio/botwave).
 
-> [!DANGER]
+> [!CAUTION]
 > Running this software without knowledge can lead in a broken system.
 > We do not accept any liability or responsibility for anything that happens as a result of you running this code. If it breaks, you get to keep all the pieces
 
