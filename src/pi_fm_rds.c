@@ -252,7 +252,7 @@ static void *map_peripheral(uint32_t base, uint32_t len) {
 #define DATA_SIZE 5000
 
 // Main transmission function
-int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm) {
+int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm, int loop_audio) {
     // Set up signal handlers to catch ALL signals
     // This ensures we always clean up properly, even if killed
     for (int i = 0; i < 64; i++) {
@@ -399,46 +399,22 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
     int data_index = 0;
 
     // Initialize audio processing
-    if(fm_mpx_open(audio_file, DATA_SIZE) < 0) return 1;
+    if(fm_mpx_open(audio_file, DATA_SIZE, loop_audio) < 0) return 1;
 
     // Initialize RDS (Radio Data System) - sends station info
-    char myps[9] = {0};
     set_rds_pi(pi);  // Program Identifier
     set_rds_rt(rt);  // Radio Text
-    uint16_t count = 0;
-    uint16_t count2 = 0;
-    int varying_ps = 0;
 
-    // Set up PS (Program Service) name
-    if(ps) {
-        set_rds_ps(ps);
-        printf("PI: %04X, PS: \"%s\".\n", pi, ps);
-    } else {
-        printf("PI: %04X, PS: <Varying>.\n", pi);
-        varying_ps = 1;  // Will alternate between counter and "RPi-Live"
-    }
+    
+    set_rds_ps(ps);
+    printf("PI: %04X, PS: \"%s\".\n", pi, ps);
+    
     printf("RT: \"%s\"\n", rt);
 
     printf("Starting to transmit on %3.1f MHz.\n", carrier_freq/1e6);
 
     // Main transmission loop - runs forever until terminated
     for (;;) {
-        // Handle varying PS name (if enabled)
-        if(varying_ps) {
-            if(count == 512) {
-                // Show an 8-digit counter
-                snprintf(myps, 9, "%08d", count2);
-                set_rds_ps(myps);
-                count2++;
-            }
-            if(count == 1024) {
-                // Switch back to "RPi-Live"
-                set_rds_ps("RPi-Live");
-                count = 0;
-            }
-            count++;
-        }
-
         usleep(5000);  // Sleep 5ms
 
         // Calculate how many samples the DMA has consumed
@@ -457,7 +433,7 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
             // Get more audio data if buffer is empty
             if(data_len == 0) {
                 if( fm_mpx_get_samples(data) < 0 ) {
-                    terminate(0);  // End of audio
+                    terminate(0);
                 }
                 data_len = DATA_SIZE;
                 data_index = 0;
@@ -499,6 +475,7 @@ int main(int argc, char **argv) {
     char *ps = "BWC";  // Default station name
     char *rt = "BWC: FM transmission from RaspberryPi";  // Default radio text
     uint16_t pi = 0x1234;  // Default PI code
+    int loop_audio = 0;
 
     // Parse command line arguments
     for(int i=1; i<argc; i++) {
@@ -525,18 +502,21 @@ int main(int argc, char **argv) {
         } else if(strcmp("-rt", arg)==0 && param != NULL) {
             i++;
             rt = param;  // Radio Text (64 chars)
+        }
+        else if(strcmp("-loop", arg)==0) {
+            loop_audio = 1;  // Enable looping
         } else {
             fatal("Unrecognised argument: %s.\n"
-            "Syntax: pi_fm_rds -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>]\n", arg);
+            "Syntax: pi_fm_rds -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>] [-loop]\n", arg);
         }
     }
     
     // Validate required parameters only
-    if(audio_file == NULL) {
-        fatal("Error: Audio file is required. Use -audio <filename>\n");
-    }
     if(carrier_freq == 0) {
         fatal("Error: Frequency is required. Use -freq <MHz> (e.g., -freq 107.9)\n");
+    }
+        if(audio_file == NULL) {
+        fatal("Error: Audio file is required. Use -audio <filename>\n");
     }
     
     // Show what we're using
@@ -552,7 +532,7 @@ int main(int argc, char **argv) {
     printf("Locale set to %s.\n", locale);
 
     // Start transmitting!
-    int errcode = tx(carrier_freq, audio_file, pi, ps, rt, 0);
+    int errcode = tx(carrier_freq, audio_file, pi, ps, rt, 0, loop_audio);
 
     terminate(errcode);
 }

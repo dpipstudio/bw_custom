@@ -39,6 +39,8 @@
 #define FIR_SIZE (2*FIR_HALF_SIZE-1)
 
 
+static int loop_mode = 0;
+
 size_t length;
 
 // coefficients of the low-pass FIR filter
@@ -80,8 +82,9 @@ float *alloc_empty_buffer(size_t length) {
 }
 
 
-int fm_mpx_open(char *filename, size_t len) {
+int fm_mpx_open(char *filename, size_t len, int loop) {
     length = len;
+    loop_mode = loop;
 
     if(filename != NULL) {
         // Open the input file
@@ -169,19 +172,27 @@ int fm_mpx_get_samples(float *mpx_buffer) {
             audio_pos -= downsample_factor;
             
             if(audio_len == 0) {
-                for(int j=0; j<2; j++) { // one retry
-                    audio_len = sf_read_float(inf, audio_buffer, length);
-                    if (audio_len < 0) {
-                        fprintf(stderr, "Error reading audio\n");
-                        return -1;
-                    }
-                    if(audio_len == 0) {
+                audio_len = sf_read_float(inf, audio_buffer, length);
+                if (audio_len < 0) {
+                    fprintf(stderr, "Error reading audio\n");
+                    return -1;
+                }
+                if(audio_len == 0) {
+                    if(loop_mode) {
+                        // Loop: rewind to beginning
                         if( sf_seek(inf, 0, SEEK_SET) < 0 ) {
                             fprintf(stderr, "Could not rewind in audio file, terminating\n");
                             return -1;
                         }
+                        audio_len = sf_read_float(inf, audio_buffer, length);
+                        if(audio_len <= 0) {
+                            fprintf(stderr, "Error reading audio after rewind\n");
+                            return -1;
+                        }
                     } else {
-                        break;
+                        // No loop: we're done, return error to signal completion
+                        fprintf(stderr, "Audio file ended, terminating transmission\n");
+                        return -1;
                     }
                 }
                 audio_index = 0;
