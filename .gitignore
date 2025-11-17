@@ -1,0 +1,13 @@
+# This file ignores everything
+# To let git taking your file, add '!/<file>'
+# For folders and their content, add:
+# !/<folder>
+# !/<folder>/**
+
+*
+
+!/src/
+!/src/**
+!/.gitignore
+!/LICENSE
+!/READMe.md
