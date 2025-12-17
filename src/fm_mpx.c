@@ -124,7 +124,7 @@ int fm_mpx_open(char *filename, size_t len, int loop) {
     
     
         // Create the low-pass FIR filter
-        float cutoff_freq = 15000 * .8;
+        float cutoff_freq = 12000;
         if(in_samplerate/2 < cutoff_freq) cutoff_freq = in_samplerate/2 * .8;
     
     
@@ -248,12 +248,12 @@ int fm_mpx_get_samples(float *mpx_buffer) {
 
         mpx_buffer[i] = 
             mpx_buffer[i] +    // RDS data samples are currently in mpx_buffer
-            4.05*out_mono;     // Unmodulated monophonic (or stereo-sum) signal
+            2.8*out_mono;     // Unmodulated monophonic (or stereo-sum) signal | reduced from 4.05 to 2.8 for lower modulation depth
             
         if(channels>1) {
             mpx_buffer[i] +=
-                4.05 * carrier_38[phase_38] * out_stereo + // Stereo difference signal
-                .9*carrier_19[phase_19];                  // Stereo pilot tone
+                2.5 * carrier_38[phase_38] * out_stereo + // Stereo difference signal
+                .7*carrier_19[phase_19];                  // Stereo pilot tone
 
             phase_19++;
             phase_38++;
