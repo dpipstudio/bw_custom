@@ -281,6 +281,9 @@ static void print_help(const char *progname)
     printf("  -pi <code>      Program Identifier (hex, e.g., 0x1234)\n");
     printf("  -ps <text>      Program Service name (8 chars max)\n");
     printf("  -rt <text>      Radio Text (64 chars max)\n");
+    printf("  -rate <Hz>      Sample rate for raw mode (default: 44100)\n");
+    printf("  -raw            Enable raw 16-bit PCM mode (stdin only)\n");
+    printf("  -channels <1|2> Number of channels for raw mode (default: 2)\n");
     printf("  -loop           Loop audio file\n");
     printf("  -h              Print this help message\n");
     printf("  -v              Print version information\n");
@@ -377,7 +380,7 @@ static void *map_peripheral(uint32_t base, uint32_t len)
 #define DATA_SIZE 5000
 
 // Main transmission function
-int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm, int loop_audio)
+int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt, float ppm, int loop_audio, int raw_mode, int raw_samplerate, int raw_channels)
 {
     // Set up signal handlers to catch ALL signals
     // This ensures we always clean up properly, even if killed
@@ -530,7 +533,7 @@ int tx(uint32_t carrier_freq, char *audio_file, uint16_t pi, char *ps, char *rt,
     int data_index = 0;
 
     // Initialize audio processing
-    if (fm_mpx_open(audio_file, DATA_SIZE, loop_audio) < 0)
+    if (fm_mpx_open(audio_file, DATA_SIZE, loop_audio, raw_mode, raw_samplerate, raw_channels) < 0)
         return 1;
 
     // Initialize RDS (Radio Data System) - sends station info
@@ -612,6 +615,9 @@ int main(int argc, char **argv)
     char *rt = "BWC: FM transmission from RaspberryPi"; // Default radio text
     uint16_t pi = 0x1234;                               // Default PI code
     int loop_audio = 0;
+    int raw_mode = 0;
+    int raw_samplerate = 44100;
+    int raw_channels = 2;
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++)
@@ -632,6 +638,11 @@ int main(int argc, char **argv)
         else if (strcmp(arg, "-loop") == 0)
         {
             loop_audio = 1;
+            continue;
+        }
+        else if (strcmp(arg, "-raw") == 0)
+        {
+            raw_mode = 1;
             continue;
         }
 
@@ -673,12 +684,31 @@ int main(int argc, char **argv)
             rt = argv[++i];
             continue;
         }
+        else if (strcmp(arg, "-rate") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -rate\n");
+            raw_samplerate = atoi(argv[++i]);
+            if (raw_samplerate < 8000 || raw_samplerate > 192000)
+                fatal("Sample rate must be between 8000 and 192000 Hz\n");
+            continue;
+        }
+        else if (strcmp(arg, "-channels") == 0)
+        {
+            if (i + 1 >= argc)
+                fatal("Missing argument after -channels\n");
+            raw_channels = atoi(argv[++i]);
+            if (raw_channels < 1 || raw_channels > 2)
+                fatal("Channels must be 1 (mono) or 2 (stereo)\n");
+            continue;
+        }
 
         // Unknown option
         if (arg[0] == '-')
         {
             fatal("Unrecognised argument: %s.\n"
-                "Syntax: bw_custom -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>] [-loop] [-h] [-v]\n", arg);
+                  "Syntax: bw_custom -freq <freq> -audio <file> [-pi <code>] [-ps <text>] [-rt <text>] [-loop] [-h] [-v]\n",
+                  arg);
         }
     }
 
@@ -708,7 +738,7 @@ int main(int argc, char **argv)
     printf("Locale set to %s.\n", locale);
 
     // Start transmitting!
-    int errcode = tx(carrier_freq, audio_file, pi, ps, rt, 0, loop_audio);
+    int errcode = tx(carrier_freq, audio_file, pi, ps, rt, 0, loop_audio, raw_mode, raw_samplerate, raw_channels);
 
     terminate(errcode);
 }
