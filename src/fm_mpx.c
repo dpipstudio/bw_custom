@@ -3,7 +3,7 @@
     Copyright (C) 2014 Christophe Jacquet, F8FTK
     Copyright (C) 2025 douxx@douxx.tech
 
-    See: https://github.com/dpipstudio/BWCustom
+    See: https://github.com/dpipstudio/bw_custom
 
     Original project: https://github.com/ChristopheJacquet/PiFmRds
 
